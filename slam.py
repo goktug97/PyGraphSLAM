@@ -77,11 +77,6 @@ for odom_idx, odom in enumerate(odoms):
         init_pose = tran
         pose = np.matmul(pose, tran)
         optimizer.add_vertex(vertex_idx, g2o.SE2(g2o.Isometry2d(pose)))
-        odom_tran = np.eye(3)
-        odom_tran[0:2, 0:2] = np.array(
-            [[np.cos(dx[2]), -np.sin(dx[2])],
-             [np.sin(dx[2]), np.cos(dx[2])]])
-        odom_tran[0:2, 2] = dx[0:2]
         rk = g2o.RobustKernelDCS()
         information = np.eye(3)
         optimizer.add_edge([vertex_idx-1, vertex_idx],
@@ -122,7 +117,7 @@ for odom_idx, odom in enumerate(odoms):
             optimizer.optimize()
             pose = optimizer.get_pose(vertex_idx).to_isometry().matrix()
 
-        # Draw trajectory and point cloud
+        # Draw trajectory and map
         map_size = 60
         traj = []
         point_cloud = []
