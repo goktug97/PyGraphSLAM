@@ -1,0 +1,3 @@
+__pycache__
+*.clf
+convert_clf.py
