@@ -5,24 +5,32 @@ import icp
 import g2o
 import pose_graph
 import scipy
+import argparse
 
 plt.gcf().canvas.mpl_connect('key_release_event',
         lambda event: [sys.exit() if event.key == 'escape' else None])
 plt.gcf().gca().set_aspect('equal')
 
-np.random.seed(123123) # For testing
+parser = argparse.ArgumentParser(description='Python Graph Slam')
+
+parser.add_argument('--seed', default=None, type=int,
+                    help='Random number generator seed')
+
+parser.add_argument('--dataset', default='intel', const='intel', nargs='?',
+                    choices=['intel', 'fr', 'aces'], help='Datasets')
+
+args = parser.parse_args()
+
+if args.seed is not None:
+    np.random.seed(args.seed) # For testing
 
 # Starting point 
 optimizer = pose_graph.PoseGraphOptimization()
 pose = np.eye(3)
 optimizer.add_vertex(0, g2o.SE2(g2o.Isometry2d(pose)), True)
 
-
-datasets = ['intel', 'fr', 'aces']
-dataset = 0
-
-lasers = np.load(f'./datasets/{datasets[dataset]}_lasers.npy', allow_pickle=True)
-odoms = np.load(f'./datasets/{datasets[dataset]}_odoms.npy', allow_pickle=True)
+lasers = np.load(f'./datasets/{args.dataset}_lasers.npy', allow_pickle=True)
+odoms = np.load(f'./datasets/{args.dataset}_odoms.npy', allow_pickle=True)
 
 init_pose = np.eye(3)
 vertex_idx = 1
