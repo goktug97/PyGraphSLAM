@@ -14,6 +14,8 @@ import time
 plt.gcf().canvas.mpl_connect('key_release_event',
         lambda event: [exit() if event.key == 'escape' else None])
 plt.gcf().gca().set_aspect('equal')
+plt.gcf().canvas.set_window_title('float')
+plt.gcf().tight_layout(pad=0)
 
 parser = argparse.ArgumentParser(description='Python Graph Slam')
 
@@ -118,7 +120,7 @@ for odom_idx, odom in enumerate(odoms):
             pose = optimizer.get_pose(vertex_idx).to_isometry().matrix()
 
         # Draw trajectory and map
-        map_size = 60
+        map_size = 44
         traj = []
         point_cloud = []
         draw_last = float('inf')
