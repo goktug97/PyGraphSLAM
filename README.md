@@ -3,6 +3,9 @@ Python Implementation of Graph SLAM
 
 PyGraphSLAM is my basic implementation of graph SLAM in Python.
 
+### Cherry Picked GIF
+![Cherry Picked GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/slam.gif)
+
 ### Notes
 - Trying the improve
 - Currently, the loop closure is really bad and not working reliably.

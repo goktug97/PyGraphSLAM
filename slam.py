@@ -9,6 +9,7 @@ import pose_graph
 import scipy
 import argparse
 import imageio
+import time
 
 plt.gcf().canvas.mpl_connect('key_release_event',
         lambda event: [exit() if event.key == 'escape' else None])
@@ -30,7 +31,8 @@ args = parser.parse_args()
 if args.save_gif:
     import atexit
     images = []
-    atexit.register(lambda: imageio.mimsave('./slam.gif', images, fps=10))
+    atexit.register(lambda: imageio.mimsave(f'./slam_{int(time.time())}.gif',
+                                            images, fps=10))
 
 if args.seed is not None:
     np.random.seed(args.seed) # For testing
