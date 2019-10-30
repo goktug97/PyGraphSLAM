@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import matplotlib.pyplot as plt
 import numpy as np
 import sys
@@ -6,9 +8,10 @@ import g2o
 import pose_graph
 import scipy
 import argparse
+import imageio
 
 plt.gcf().canvas.mpl_connect('key_release_event',
-        lambda event: [sys.exit() if event.key == 'escape' else None])
+        lambda event: [exit() if event.key == 'escape' else None])
 plt.gcf().gca().set_aspect('equal')
 
 parser = argparse.ArgumentParser(description='Python Graph Slam')
@@ -19,7 +22,15 @@ parser.add_argument('--seed', default=None, type=int,
 parser.add_argument('--dataset', default='intel', const='intel', nargs='?',
                     choices=['intel', 'fr', 'aces'], help='Datasets')
 
+parser.add_argument('--save_gif', dest='save_gif', action='store_true')
+parser.set_defaults(save_gif=False)
+
 args = parser.parse_args()
+    
+if args.save_gif:
+    import atexit
+    images = []
+    atexit.register(lambda: imageio.mimsave('./slam.gif', images, fps=10))
 
 if args.seed is not None:
     np.random.seed(args.seed) # For testing
@@ -141,4 +152,13 @@ for odom_idx, odom in enumerate(odoms):
         plt.plot(point_cloud[:, 0], point_cloud[:, 1], '.b', markersize=0.1)
         plt.pause(0.0001)
 
+        if args.save_gif:
+            plt.gcf().canvas.draw()
+            image = np.frombuffer(plt.gcf().canvas.tostring_rgb(), dtype='uint8')
+            image  = image.reshape(plt.gcf().canvas.get_width_height()[::-1] + (3,))
+            images.append(image)
+
         vertex_idx += 1
+
+
+
