@@ -16,8 +16,18 @@ PyGraphSLAM is my basic implementation of graph SLAM in Python.
 ### Usage
 
 ``` bash
-python slam.py --dataset intel --seed 123123
+python slam.py --dataset intel
 ```
+
+For more options
+```bash
+python slam.py --help
+```
+
+### TODO
+- Refactor so it can be used with different kind of data
+- Add better loop closure
+- Calculate information matrix
 
 ### License
 PyGraphSLAM is licensed under the MIT License.
