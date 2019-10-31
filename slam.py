@@ -22,6 +22,9 @@ parser = argparse.ArgumentParser(description='Python Graph Slam')
 parser.add_argument('--seed', default=None, type=int,
                     help='Random number generator seed')
 
+parser.add_argument('--draw_last', default=float('inf'), type=int,
+                    help='Random number generator seed')
+
 parser.add_argument('--dataset', default='intel', const='intel', nargs='?',
                     choices=['intel', 'fr', 'aces'], help='Datasets')
 
@@ -69,12 +72,13 @@ for odom_idx, odom in enumerate(odoms):
         prev_random_idx = np.random.choice(np.arange(A.shape[0]), size, replace=True)
         cur_random_idx = np.random.choice(np.arange(B.shape[0]), size, replace=True)
 
-        try:
-            tran, distances, iter = icp.icp(
-                B[cur_random_idx], A[prev_random_idx], init_pose,
-                max_iterations=80, tolerance=0.0001)
-        except ValueError:
-            continue
+        with np.errstate(all='raise'):
+            try:
+                tran, distances, iter = icp.icp(
+                    B[cur_random_idx], A[prev_random_idx], init_pose,
+                    max_iterations=80, tolerance=0.0001)
+            except Exception as e:
+                continue
 
         init_pose = tran
         pose = np.matmul(pose, tran)
@@ -104,18 +108,43 @@ for odom_idx, odom in enumerate(odoms):
                     np.arange(A.shape[0]), size, replace=True)
                 cur_random_idx = np.random.choice(
                     np.arange(B.shape[0]), size, replace=True)
-                try:
-                    tran, distances, iter = icp.icp(
-                        A[prev_random_idx], B[cur_random_idx], np.eye(3),
-                        max_iterations=80, tolerance=0.0001)
-                except ValueError:
-                    continue
+                with np.errstate(all='raise'):
+                    try:
+                        tran, distances, iter = icp.icp(
+                            A[prev_random_idx], B[cur_random_idx], np.eye(3),
+                            max_iterations=80, tolerance=0.0001)
+                    except Exception as e:
+                        continue
                 information = np.eye(3)
-                if np.mean(distances) < 0.2:
+                if np.mean(distances) < 0.1:
                     rk = g2o.RobustKernelDCS()
                     optimizer.add_edge([vertex_idx, idx],
                                        g2o.SE2(g2o.Isometry2d(tran)),
                                        information, robust_kernel=rk)
+                    i = 1
+                    while True:
+                        if i > 10:
+                            break
+                        A = registered_lasers[idx-i]
+                        C = registered_lasers[vertex_idx-i]
+                        size = np.min([A.shape[0], C.shape[0]])
+                        prev_random_idx = np.random.choice(
+                            np.arange(A.shape[0]), size, replace=True)
+                        cur_random_idx = np.random.choice(
+                            np.arange(C.shape[0]), size, replace=True)
+                        tran, distances, iter = icp.icp(
+                            A[prev_random_idx], C[cur_random_idx], np.eye(3),
+                            max_iterations=80, tolerance=0.0001)
+                        if np.mean(distances) < 0.1:
+                            rk = g2o.RobustKernelDCS()
+                            optimizer.add_edge([vertex_idx-i, idx-i],
+                                               g2o.SE2(g2o.Isometry2d(tran)),
+                                               information, robust_kernel=rk)
+                        else:
+                            break
+
+                        i += 1
+
             optimizer.optimize()
             pose = optimizer.get_pose(vertex_idx).to_isometry().matrix()
 
@@ -123,7 +152,7 @@ for odom_idx, odom in enumerate(odoms):
         map_size = 44
         traj = []
         point_cloud = []
-        draw_last = float('inf')
+        draw_last = args.draw_last
 
         for idx in range(max(0, vertex_idx-draw_last), vertex_idx):
             x = optimizer.get_pose(idx)
