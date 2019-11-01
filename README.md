@@ -26,8 +26,10 @@ python slam.py --help
 
 ### TODO
 - Refactor so it can be used with different kind of data
-- Add better loop closure
 - Calculate information matrix
+
+### DONE 
+- Add better loop closure (marginal covariances?) - Probably wrong
 
 ### License
 PyGraphSLAM is licensed under the MIT License.

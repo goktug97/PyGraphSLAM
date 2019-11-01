@@ -11,6 +11,20 @@ import argparse
 import imageio
 import time
 
+from matplotlib.patches import Ellipse
+
+def hessian_matrix(hessian_fun):
+    hessian = np.ndarray((3, 3))
+    for i in range(3):
+        for j in range(3):
+            hessian[i, j] = hessian_fun(i, j)
+    return hessian
+
+def eigsorted(cov):
+        vals, vecs = np.linalg.eigh(cov)
+        order = vals.argsort()[::-1]
+        return vals[order], vecs[:,order]
+
 plt.gcf().canvas.mpl_connect('key_release_event',
         lambda event: [exit() if event.key == 'escape' else None])
 plt.gcf().gca().set_aspect('equal')
@@ -23,7 +37,7 @@ parser.add_argument('--seed', default=None, type=int,
                     help='Random number generator seed')
 
 parser.add_argument('--draw_last', default=float('inf'), type=int,
-                    help='Random number generator seed')
+                    help='Number of point clouds to draw.')
 
 parser.add_argument('--dataset', default='intel', const='intel', nargs='?',
                     choices=['intel', 'fr', 'aces'], help='Datasets')
@@ -64,13 +78,20 @@ for odom_idx, odom in enumerate(odoms):
         continue
 
     dx = odom - prev_odom
-    if np.linalg.norm(dx[0:2]) > 0.5 or abs(dx[2]) > 0.2:
+    if np.linalg.norm(dx[0:2]) > 0.3 or abs(dx[2]) > 0.2:
         # Scan Matching
         A = lasers[prev_idx]
         B = lasers[odom_idx]
         size = np.min([A.shape[0], B.shape[0]])
-        prev_random_idx = np.random.choice(np.arange(A.shape[0]), size, replace=True)
-        cur_random_idx = np.random.choice(np.arange(B.shape[0]), size, replace=True)
+        prev_random_idx = np.sort(
+            np.random.choice(np.arange(A.shape[0]), size, replace=True))
+        cur_random_idx = np.sort(
+            np.random.choice(np.arange(B.shape[0]), size, replace=True))
+
+        x, y, yaw = dx[0], dx[1], dx[2]
+        init_pose = np.array([[np.cos(yaw), -np.sin(yaw), x],
+                              [np.sin(yaw), np.cos(yaw), y],
+                              [0, 0, 1]])
 
         with np.errstate(all='raise'):
             try:
@@ -94,56 +115,40 @@ for odom_idx, odom in enumerate(odoms):
         registered_lasers.append(B)
 
         # Loop Closure
-        if vertex_idx > 1 and not vertex_idx % 10:
-            poses = [optimizer.get_pose(idx).to_vector()[0:2]
-                     for idx in range(vertex_idx-1)]
-            kd = scipy.spatial.cKDTree(poses)
-            x, y, theta = optimizer.get_pose(idx).to_vector()
-            direction = np.array([np.cos(theta), np.sin(theta)])
-            idxs = kd.query_ball_point(np.array([x, y]) + direction*2, r=2)
-            for idx in idxs:
-                A = registered_lasers[idx]
-                size = np.min([A.shape[0], B.shape[0]])
-                prev_random_idx = np.random.choice(
-                    np.arange(A.shape[0]), size, replace=True)
-                cur_random_idx = np.random.choice(
-                    np.arange(B.shape[0]), size, replace=True)
-                with np.errstate(all='raise'):
-                    try:
-                        tran, distances, iter = icp.icp(
-                            A[prev_random_idx], B[cur_random_idx], np.eye(3),
-                            max_iterations=80, tolerance=0.0001)
-                    except Exception as e:
-                        continue
-                information = np.eye(3)
-                if np.mean(distances) < 0.1:
-                    rk = g2o.RobustKernelDCS()
-                    optimizer.add_edge([vertex_idx, idx],
-                                       g2o.SE2(g2o.Isometry2d(tran)),
-                                       information, robust_kernel=rk)
-                    i = 1
-                    while True:
-                        if i > 10:
-                            break
-                        A = registered_lasers[idx-i]
-                        C = registered_lasers[vertex_idx-i]
-                        size = np.min([A.shape[0], C.shape[0]])
-                        prev_random_idx = np.random.choice(
-                            np.arange(A.shape[0]), size, replace=True)
-                        cur_random_idx = np.random.choice(
-                            np.arange(C.shape[0]), size, replace=True)
-                        tran, distances, iter = icp.icp(
-                            A[prev_random_idx], C[cur_random_idx], np.eye(3),
-                            max_iterations=80, tolerance=0.0001)
-                        if np.mean(distances) < 0.1:
-                            rk = g2o.RobustKernelDCS()
-                            optimizer.add_edge([vertex_idx-i, idx-i],
-                                               g2o.SE2(g2o.Isometry2d(tran)),
-                                               information, robust_kernel=rk)
-                        else:
-                            break
-
-                        i += 1
+        if vertex_idx > 10 and not vertex_idx % 10:
+            pos = optimizer.get_pose(vertex_idx).to_vector()[0:2]
+            optimizer.optimize()
+            for idx in range(1, vertex_idx):
+                H = hessian_matrix(optimizer.vertex(idx).hessian)
+                cov = np.linalg.inv(H)
+                nstd = 3
+                vals, vecs = eigsorted(cov[0:2,0:2])
+                theta = np.degrees(np.arctan2(*vecs[:,0][::-1]))
+                width, height = 2 * nstd * np.sqrt(vals)
+                prev_pos = optimizer.get_pose(idx).to_vector()[0:2]
+                rot = np.array([[np.cos(theta), -np.sin(theta)],
+                                      [np.sin(theta), np.cos(theta)]])
+                x, y = rot @ (pos-prev_pos)
+                if ((x**2)/((width/2)**2)) + ((y**2)/((height/2)**2)) <= 1:
+                    A = registered_lasers[idx]
+                    size = np.min([A.shape[0], B.shape[0]])
+                    prev_random_idx = np.sort(np.random.choice(
+                        np.arange(A.shape[0]), size, replace=True))
+                    cur_random_idx = np.sort(np.random.choice(
+                        np.arange(B.shape[0]), size, replace=True))
+                    with np.errstate(all='raise'):
+                        try:
+                            tran, distances, iter = icp.icp(
+                                A[prev_random_idx], B[cur_random_idx], np.eye(3),
+                                max_iterations=80, tolerance=0.0001)
+                        except Exception as e:
+                            continue
+                    information = np.eye(3)
+                    if np.mean(distances) < 0.05:
+                        rk = g2o.RobustKernelDCS()
+                        optimizer.add_edge([vertex_idx, idx],
+                                           g2o.SE2(g2o.Isometry2d(tran)),
+                                           information, robust_kernel=rk)
 
             optimizer.optimize()
             pose = optimizer.get_pose(vertex_idx).to_isometry().matrix()
@@ -175,6 +180,7 @@ for odom_idx, odom in enumerate(odoms):
         plt.plot(map_size/2, -map_size/2, '.b')
         plt.plot(-map_size/2, -map_size/2, '.b')
 
+
         traj = np.array(traj)
         plt.plot(traj[:, 0], traj[:, 1], '-g')
         plt.plot(point_cloud[:, 0], point_cloud[:, 1], '.b', markersize=0.1)
@@ -187,6 +193,7 @@ for odom_idx, odom in enumerate(odoms):
             images.append(image)
 
         vertex_idx += 1
+
 
 
 

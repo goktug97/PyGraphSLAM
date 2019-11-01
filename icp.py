@@ -111,7 +111,7 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
         # the current source and nearest destination points
         T,_,_ = best_fit_transform(src[:m, distances < 1.0].T, dst[:m,indices].T)
 
-        distances = distances[distances < 1.0]
+        distances = distances[distances <= 1.0]
 
         # update the current source
         src = np.dot(T, src)
