@@ -82,22 +82,17 @@ for odom_idx, odom in enumerate(odoms):
         # Scan Matching
         A = lasers[prev_idx]
         B = lasers[odom_idx]
-        size = np.min([A.shape[0], B.shape[0]])
-        prev_random_idx = np.sort(
-            np.random.choice(np.arange(A.shape[0]), size, replace=True))
-        cur_random_idx = np.sort(
-            np.random.choice(np.arange(B.shape[0]), size, replace=True))
-
         x, y, yaw = dx[0], dx[1], dx[2]
         init_pose = np.array([[np.cos(yaw), -np.sin(yaw), x],
                               [np.sin(yaw), np.cos(yaw), y],
                               [0, 0, 1]])
 
+        tran, distances, iter, cov = icp.icp(
+            B, A, init_pose,
+            max_iterations=80, tolerance=0.0001)
         with np.errstate(all='raise'):
             try:
-                tran, distances, iter = icp.icp(
-                    B[cur_random_idx], A[prev_random_idx], init_pose,
-                    max_iterations=80, tolerance=0.0001)
+                pass
             except Exception as e:
                 continue
 
@@ -105,7 +100,7 @@ for odom_idx, odom in enumerate(odoms):
         pose = np.matmul(pose, tran)
         optimizer.add_vertex(vertex_idx, g2o.SE2(g2o.Isometry2d(pose)))
         rk = g2o.RobustKernelDCS()
-        information = np.eye(3)
+        information = np.linalg.inv(cov)
         optimizer.add_edge([vertex_idx-1, vertex_idx],
                            g2o.SE2(g2o.Isometry2d(tran)),
                            information, robust_kernel=rk)
@@ -131,19 +126,14 @@ for odom_idx, odom in enumerate(odoms):
                 x, y = rot @ (pos-prev_pos)
                 if ((x**2)/((width/2)**2)) + ((y**2)/((height/2)**2)) <= 1:
                     A = registered_lasers[idx]
-                    size = np.min([A.shape[0], B.shape[0]])
-                    prev_random_idx = np.sort(np.random.choice(
-                        np.arange(A.shape[0]), size, replace=True))
-                    cur_random_idx = np.sort(np.random.choice(
-                        np.arange(B.shape[0]), size, replace=True))
                     with np.errstate(all='raise'):
                         try:
-                            tran, distances, iter = icp.icp(
-                                A[prev_random_idx], B[cur_random_idx], np.eye(3),
+                            tran, distances, iter, cov = icp.icp(
+                                A, B, np.eye(3),
                                 max_iterations=80, tolerance=0.0001)
                         except Exception as e:
                             continue
-                    information = np.eye(3)
+                    information = np.linalg.inv(cov) 
                     if np.mean(distances) < 0.05:
                         rk = g2o.RobustKernelDCS()
                         optimizer.add_edge([vertex_idx, idx],

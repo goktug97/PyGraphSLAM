@@ -1,9 +1,84 @@
 # Original code: https://github.com/ClayFlannigan/icp
 # Modified to reject pairs that have greater distance than the specified threshold
+# Add covariance check
 
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 
+def compute_C_k(point1, point2):
+    d = point1 - point2
+    alpha = np.pi/2 + np.arctan2(d[1], d[0])
+    c = np.cos(alpha)
+    s = np.sin(alpha)
+    m = np.array([[c*c, c*s],
+                  [c*s, s*s]])
+    return m
+
+def dC_drho(point1, point2):
+    eps = 0.001
+    C_k = compute_C_k(point1, point2)
+    point1b = point1 + point1 * (eps/np.linalg.norm(point1))
+    C_k_eps = compute_C_k(point1b, point2)
+    return (1/eps) * (C_k_eps - C_k)
+
+def rotation_matrix(theta):
+    return np.array([[np.cos(theta), -np.sin(theta)],
+                     [np.sin(theta), np.cos(theta)]])
+
+def vers(theta):
+    return np.array([np.cos(theta), np.sin(theta)])
+
+def compute_covariance(laser_ref, laser_sens, t, theta, angles):
+    # Reference: https://censi.science/research/robot-perception/icpcov/
+    d2J_dxdy1 = np.zeros((3, laser_ref.shape[0]))
+    d2J_dxdy2 = np.zeros((3, laser_sens.shape[0]))
+
+    d2J_dt2 = np.zeros((2, 2))
+    d2J_dt_dtheta = np.zeros((2,1));
+    d2J_dtheta2 = np.zeros((1, 1))
+
+    for i in range(laser_ref.shape[0]-1):
+        p_i = laser_sens[i]
+        p_j1 = laser_ref[i]
+        p_j2 = laser_ref[i+1]
+        v1 = rotation_matrix(theta + np.pi/2) @ p_i
+        v2 = rotation_matrix(theta) @ p_i + t - p_j1
+        v3 = vers(theta + angles[i])
+        v4 = vers(theta + angles[i] + np.pi/2)
+
+        C_k = compute_C_k(p_j1, p_j2)
+        d2J_dt2_k = 2 * C_k
+        d2J_dt_dtheta_k = 2 * (C_k @ v1)
+
+        v_new = rotation_matrix(theta+np.pi) @ p_i
+
+        d2J_dtheta2_k = 2 * ((C_k @ v_new @ v2.T) + (C_k @ v1 @ v1.T))
+
+        d2J_dt2 += d2J_dt2_k
+        d2J_dt_dtheta += d2J_dt_dtheta_k[:, np.newaxis]
+        d2J_dtheta2 += d2J_dtheta2_k
+        d2Jk_dtdrho_i = 2 * C_k @ v3
+        d2Jk_dtheta_drho_i = 2 * ((C_k @ v4 @ v2.T) + (C_k @ v1 @ v3.T))
+        d2J_dxdy2[:, i] += np.hstack([d2Jk_dtdrho_i, d2Jk_dtheta_drho_i])
+        dC_drho_j1 = dC_drho(p_j1, p_j2)
+        dC_drho_j2 = dC_drho(p_j2, p_j1)
+        v_j1 = vers(angles[i]) # Probably wrong
+        d2Jk_dt_drho_j1 = (-2 * (C_k @ v_j1)) + (2 * (dC_drho_j1 @ v2))
+        d2Jk_dtheta_drho_j1 = (-2 * (C_k @ v1 @ v_j1.T)) + (dC_drho_j1 @ v1 @ v2.T)
+        d2J_dxdy1[:, i] += np.hstack([d2Jk_dt_drho_j1, d2Jk_dtheta_drho_j1])
+        d2Jk_dt_drho_j2 = 2 * (dC_drho_j2 @ v2)
+        d2Jk_dtheta_drho_j2 =  2 * (dC_drho_j2 @ v1 @ v2.T)
+        d2J_dxdy1[:, i+1] += np.hstack([d2Jk_dt_drho_j2, d2Jk_dtheta_drho_j2])
+
+    d2J_dx2 = np.vstack([np.hstack([d2J_dt2, d2J_dt_dtheta]),
+                         np.hstack([d2J_dt_dtheta.T, d2J_dtheta2])])
+
+    edx_dy1 = -np.linalg.inv(d2J_dx2) @ d2J_dxdy1
+    edx_dy2 = -np.linalg.inv(d2J_dx2) @ d2J_dxdy2
+
+    ecov0_x = edx_dy1 @ edx_dy1.T + edx_dy2 @ edx_dy2.T
+
+    return ecov0_x, edx_dy1, edx_dy2
 
 def best_fit_transform(A, B):
     '''
@@ -83,6 +158,13 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
         i: number of iterations to converge
     '''
 
+    size = np.min([A.shape[0], B.shape[0]])
+    prev_random_idx = np.sort(np.random.choice(
+        np.arange(A.shape[0]), size, replace=True))
+    cur_random_idx = np.sort(np.random.choice(
+        np.arange(B.shape[0]), size, replace=True))
+    A = A[prev_random_idx]
+    B = B[cur_random_idx]
     assert A.shape == B.shape
 
     # get number of dimensions
@@ -125,4 +207,13 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     # calculate final transformation
     T,_,_ = best_fit_transform(A, src[:m,:].T)
 
-    return T, distances, i
+    theta = np.arctan2(T[1,0], T[0,0])
+    t = T[0:2, 2]
+    angle_res = 1.0
+
+    # FIXME:
+    # angles = cur_random_idx * angle_res - 90 
+    # cov, _, _ = compute_covariance(src[:m, :].T, A, t, theta, np.radians(angles))
+    cov = np.eye(3)
+
+    return T, distances, i, cov
