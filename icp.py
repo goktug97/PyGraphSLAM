@@ -158,13 +158,6 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
         i: number of iterations to converge
     '''
 
-    size = np.min([A.shape[0], B.shape[0]])
-    prev_random_idx = np.sort(np.random.choice(
-        np.arange(A.shape[0]), size, replace=True))
-    cur_random_idx = np.sort(np.random.choice(
-        np.arange(B.shape[0]), size, replace=True))
-    A = A[prev_random_idx]
-    B = B[cur_random_idx]
     assert A.shape == B.shape
 
     # get number of dimensions
@@ -187,13 +180,16 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
         distances, indices = nearest_neighbor(src[:m,:].T, dst[:m,:].T)
 
         # Reject pairs that have 1 meter distance between them
+        indices = indices[np.linalg.norm(src[:m, :], axis=0) < 80]
+        distances = distances[np.linalg.norm(src[:m, :], axis=0) < 80]
+        filtered_src = src[:, np.linalg.norm(src[:m, :], axis=0) < 80]
         indices = indices[distances < 1.0]
 
         # compute the transformation between
         # the current source and nearest destination points
-        T,_,_ = best_fit_transform(src[:m, distances < 1.0].T, dst[:m,indices].T)
+        T,_,_ = best_fit_transform(filtered_src[:m, distances < 1.0].T, dst[:m,indices].T)
 
-        distances = distances[distances <= 1.0]
+        # distances = distances[distances <= 1.0]
 
         # update the current source
         src = np.dot(T, src)
@@ -207,11 +203,11 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     # calculate final transformation
     T,_,_ = best_fit_transform(A, src[:m,:].T)
 
-    theta = np.arctan2(T[1,0], T[0,0])
-    t = T[0:2, 2]
-    angle_res = 1.0
 
     # FIXME:
+    # theta = np.arctan2(T[1,0], T[0,0])
+    # t = T[0:2, 2]
+    # angle_res = 1.0
     # angles = cur_random_idx * angle_res - 90 
     # cov, _, _ = compute_covariance(src[:m, :].T, A, t, theta, np.radians(angles))
     cov = np.eye(3)

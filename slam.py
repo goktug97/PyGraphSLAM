@@ -33,9 +33,6 @@ plt.gcf().tight_layout(pad=0)
 
 parser = argparse.ArgumentParser(description='Python Graph Slam')
 
-parser.add_argument('--seed', default=None, type=int,
-                    help='Random number generator seed')
-
 parser.add_argument('--draw_last', default=float('inf'), type=int,
                     help='Number of point clouds to draw.')
 
@@ -46,15 +43,12 @@ parser.add_argument('--save_gif', dest='save_gif', action='store_true')
 parser.set_defaults(save_gif=False)
 
 args = parser.parse_args()
-    
+
 if args.save_gif:
     import atexit
     images = []
     atexit.register(lambda: imageio.mimsave(f'./slam_{int(time.time())}.gif',
                                             images, fps=10))
-
-if args.seed is not None:
-    np.random.seed(args.seed) # For testing
 
 # Starting point 
 optimizer = pose_graph.PoseGraphOptimization()
@@ -78,7 +72,7 @@ for odom_idx, odom in enumerate(odoms):
         continue
 
     dx = odom - prev_odom
-    if np.linalg.norm(dx[0:2]) > 0.3 or abs(dx[2]) > 0.2:
+    if np.linalg.norm(dx[0:2]) > 0.5 or abs(dx[2]) > 0.2:
         # Scan Matching
         A = lasers[prev_idx]
         B = lasers[odom_idx]
@@ -133,8 +127,8 @@ for odom_idx, odom in enumerate(odoms):
                                 max_iterations=80, tolerance=0.0001)
                         except Exception as e:
                             continue
-                    information = np.linalg.inv(cov) 
-                    if np.mean(distances) < 0.05:
+                    information = np.linalg.inv(cov)
+                    if np.mean(distances) < 0.2:
                         rk = g2o.RobustKernelDCS()
                         optimizer.add_edge([vertex_idx, idx],
                                            g2o.SE2(g2o.Isometry2d(tran)),
@@ -153,7 +147,9 @@ for odom_idx, odom in enumerate(odoms):
             x = optimizer.get_pose(idx)
             r = x.to_isometry().R
             t = x.to_isometry().t
-            point_cloud.append((r @ registered_lasers[idx].T + t[:, np.newaxis]).T)
+            filtered = registered_lasers[idx]
+            filtered = filtered[np.linalg.norm(filtered, axis=1) < 80]
+            point_cloud.append((r @ filtered.T + t[:, np.newaxis]).T)
             traj.append(x.to_vector()[0:2])
         point_cloud = np.vstack(point_cloud)
 
