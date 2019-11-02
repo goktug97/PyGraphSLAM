@@ -72,7 +72,7 @@ for odom_idx, odom in enumerate(odoms):
         continue
 
     dx = odom - prev_odom
-    if np.linalg.norm(dx[0:2]) > 0.5 or abs(dx[2]) > 0.2:
+    if np.linalg.norm(dx[0:2]) > 0.4 or abs(dx[2]) > 0.2:
         # Scan Matching
         A = lasers[prev_idx]
         B = lasers[odom_idx]
@@ -81,12 +81,11 @@ for odom_idx, odom in enumerate(odoms):
                               [np.sin(yaw), np.cos(yaw), y],
                               [0, 0, 1]])
 
-        tran, distances, iter, cov = icp.icp(
-            B, A, init_pose,
-            max_iterations=80, tolerance=0.0001)
         with np.errstate(all='raise'):
             try:
-                pass
+                tran, distances, iter, cov = icp.icp(
+                    B, A, init_pose,
+                    max_iterations=80, tolerance=0.0001)
             except Exception as e:
                 continue
 
@@ -105,34 +104,27 @@ for odom_idx, odom in enumerate(odoms):
 
         # Loop Closure
         if vertex_idx > 10 and not vertex_idx % 10:
-            pos = optimizer.get_pose(vertex_idx).to_vector()[0:2]
-            optimizer.optimize()
-            for idx in range(1, vertex_idx):
-                H = hessian_matrix(optimizer.vertex(idx).hessian)
-                cov = np.linalg.inv(H)
-                nstd = 3
-                vals, vecs = eigsorted(cov[0:2,0:2])
-                theta = np.degrees(np.arctan2(*vecs[:,0][::-1]))
-                width, height = 2 * nstd * np.sqrt(vals)
-                prev_pos = optimizer.get_pose(idx).to_vector()[0:2]
-                rot = np.array([[np.cos(theta), -np.sin(theta)],
-                                      [np.sin(theta), np.cos(theta)]])
-                x, y = rot @ (pos-prev_pos)
-                if ((x**2)/((width/2)**2)) + ((y**2)/((height/2)**2)) <= 1:
-                    A = registered_lasers[idx]
-                    with np.errstate(all='raise'):
-                        try:
-                            tran, distances, iter, cov = icp.icp(
-                                A, B, np.eye(3),
-                                max_iterations=80, tolerance=0.0001)
-                        except Exception as e:
-                            continue
-                    information = np.linalg.inv(cov)
-                    if np.mean(distances) < 0.2:
-                        rk = g2o.RobustKernelDCS()
-                        optimizer.add_edge([vertex_idx, idx],
-                                           g2o.SE2(g2o.Isometry2d(tran)),
-                                           information, robust_kernel=rk)
+            poses = [optimizer.get_pose(idx).to_vector()[0:2]
+                    for idx in range(vertex_idx-1)]
+            kd = scipy.spatial.cKDTree(poses)
+            x, y, theta = optimizer.get_pose(idx).to_vector()
+            direction = np.array([np.cos(theta), np.sin(theta)])
+            idxs = kd.query_ball_point(np.array([x, y]), r=4.25)
+            for idx in idxs:
+                A = registered_lasers[idx]
+                with np.errstate(all='raise'):
+                    try:
+                        tran, distances, iter, cov = icp.icp(
+                            A, B, np.eye(3),
+                            max_iterations=80, tolerance=0.0001)
+                    except Exception as e:
+                        continue
+                information = np.linalg.inv(cov)
+                if np.mean(distances) < 0.15:
+                    rk = g2o.RobustKernelDCS()
+                    optimizer.add_edge([vertex_idx, idx],
+                                       g2o.SE2(g2o.Isometry2d(tran)),
+                                       information, robust_kernel=rk)
 
             optimizer.optimize()
             pose = optimizer.get_pose(vertex_idx).to_isometry().matrix()

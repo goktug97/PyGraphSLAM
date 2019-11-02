@@ -24,14 +24,6 @@ For more options
 python slam.py --help
 ```
 
-### TODO
-- Refactor so it can be used with different kind of data
-- Calculate information matrix
-- Better loop closure is slower while being not better?
-
-### DONE 
-- Add better loop closure (marginal covariances?) - Probably wrong
-
 ### License
 PyGraphSLAM is licensed under the MIT License.
 

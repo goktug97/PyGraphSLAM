@@ -204,12 +204,12 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     T,_,_ = best_fit_transform(A, src[:m,:].T)
 
 
-    # FIXME:
+    # FIXME: BROKEN
     # theta = np.arctan2(T[1,0], T[0,0])
     # t = T[0:2, 2]
-    # angle_res = 1.0
-    # angles = cur_random_idx * angle_res - 90 
-    # cov, _, _ = compute_covariance(src[:m, :].T, A, t, theta, np.radians(angles))
+    # angle_res = 1
+    # angles = np.arange(-90, 91, angle_res)
+    # cov, a, b = compute_covariance(A, src[:m, :].T, t, theta, np.radians(angles))
     cov = np.eye(3)
 
     return T, distances, i, cov
