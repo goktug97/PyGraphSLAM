@@ -32,16 +32,11 @@ plt.gcf().canvas.set_window_title('float')
 plt.gcf().tight_layout(pad=0)
 
 parser = argparse.ArgumentParser(description='Python Graph Slam')
-
+parser.add_argument('--input', type=str, help='Input CLF File.', required=True)
 parser.add_argument('--draw_last', default=float('inf'), type=int,
                     help='Number of point clouds to draw.')
-
-parser.add_argument('--dataset', default='intel', const='intel', nargs='?',
-                    choices=['intel', 'fr', 'aces'], help='Datasets')
-
 parser.add_argument('--save_gif', dest='save_gif', action='store_true')
 parser.set_defaults(save_gif=False)
-
 args = parser.parse_args()
 
 if args.save_gif:
@@ -50,13 +45,34 @@ if args.save_gif:
     atexit.register(lambda: imageio.mimsave(f'./slam_{int(time.time())}.gif',
                                             images, fps=10))
 
+# Read Data
+with open(args.input, 'r') as f:
+   lasers = []
+   odoms = []
+   for line in f:
+       tokens = line.split(' ')
+       if tokens[0] == 'FLASER':
+           num_readings = int(tokens[1])
+           scans = np.array(tokens[2:2+num_readings], dtype=np.float)
+           scan_time = float(tokens[2+num_readings+6])
+           index = np.arange(-90, 90+180/num_readings, 180/num_readings)
+           index = np.delete(index, num_readings//2)
+           converted_scans = []
+           angles = np.radians(index)
+           converted_scans = np.array([np.cos(angles), np.sin(angles)]).T * scans[:, np.newaxis]
+           lasers.append(np.array(converted_scans))
+           x = float(tokens[2+num_readings])
+           y = float(tokens[3+num_readings])
+           theta = float(tokens[4+num_readings])
+           odoms.append([x, y, theta])
+
+odoms = np.array(odoms)
+lasers = np.array(lasers)
+
 # Starting point 
 optimizer = pose_graph.PoseGraphOptimization()
 pose = np.eye(3)
 optimizer.add_vertex(0, g2o.SE2(g2o.Isometry2d(pose)), True)
-
-lasers = np.load(f'./datasets/{args.dataset}_lasers.npy', allow_pickle=True)
-odoms = np.load(f'./datasets/{args.dataset}_odoms.npy', allow_pickle=True)
 
 init_pose = np.eye(3)
 vertex_idx = 1
@@ -171,7 +187,3 @@ for odom_idx, odom in enumerate(odoms):
             images.append(image)
 
         vertex_idx += 1
-
-
-
-

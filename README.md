@@ -3,8 +3,8 @@ Python Implementation of Graph SLAM
 
 PyGraphSLAM is my basic implementation of graph SLAM in Python.
 
-### Cherry Picked GIF
-![Cherry Picked GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/graph_slam.gif)
+### GIF
+![GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/graph_slam.gif)
 
 ### Notes
 - Trying to improve accuracy, currently the code looks like a scratch book.
@@ -14,9 +14,10 @@ PyGraphSLAM is my basic implementation of graph SLAM in Python.
 * g2opy             https://github.com/uoip/g2opy
 
 ### Usage
+You can download datasets from http://ais.informatik.uni-freiburg.de/slamevaluation/datasets.php
 
 ``` bash
-python slam.py --dataset intel
+python slam.py --input intel.clf
 ```
 
 For more options
