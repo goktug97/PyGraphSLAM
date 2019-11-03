@@ -4,7 +4,7 @@ Python Implementation of Graph SLAM
 PyGraphSLAM is my basic implementation of graph SLAM in Python.
 
 ### GIF
-![GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/graph_slam.gif)
+![GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/graphslam.gif)
 
 ### Notes
 - Trying to improve accuracy, currently the code looks like a scratch book.
