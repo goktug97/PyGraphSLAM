@@ -78,6 +78,11 @@ init_pose = np.eye(3)
 vertex_idx = 1
 registered_lasers = []
 
+max_x = -float('inf')
+max_y = -float('inf')
+min_x = float('inf')
+min_y = float('inf')
+
 for odom_idx, odom in enumerate(odoms):
     # Initialize
     if odom_idx == 0:
@@ -146,7 +151,6 @@ for odom_idx, odom in enumerate(odoms):
             pose = optimizer.get_pose(vertex_idx).to_isometry().matrix()
 
         # Draw trajectory and map
-        map_size = 44
         traj = []
         point_cloud = []
         draw_last = args.draw_last
@@ -166,14 +170,15 @@ for odom_idx, odom in enumerate(odoms):
         point_cloud = np.unique(point_cloud, axis=0)
         point_cloud = point_cloud * xyreso
 
+        current_max = np.max(point_cloud, axis=0)
+        current_min = np.min(point_cloud, axis=0)
+        max_x = max(max_x, current_max[0])
+        max_y = max(max_y, current_max[1])
+        min_x = min(min_x, current_min[0])
+        min_y = min(min_y, current_min[1])
+
         plt.cla()
-
-        # To make map static, draw some fixed points
-        plt.plot(map_size/2, map_size/2, '.b')
-        plt.plot(-map_size/2, map_size/2, '.b')
-        plt.plot(map_size/2, -map_size/2, '.b')
-        plt.plot(-map_size/2, -map_size/2, '.b')
-
+        plt.axis([min_x, max_x, min_y, max_y])
 
         traj = np.array(traj)
         plt.plot(traj[:, 0], traj[:, 1], '-g')
