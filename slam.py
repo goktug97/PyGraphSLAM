@@ -128,7 +128,7 @@ for odom_idx, odom in enumerate(odoms):
             poses = [optimizer.get_pose(idx).to_vector()[0:2]
                     for idx in range(vertex_idx-1)]
             kd = scipy.spatial.cKDTree(poses)
-            x, y, theta = optimizer.get_pose(idx).to_vector()
+            x, y, theta = optimizer.get_pose(vertex_idx).to_vector()
             direction = np.array([np.cos(theta), np.sin(theta)])
             idxs = kd.query_ball_point(np.array([x, y]), r=4.25)
             for idx in idxs:
