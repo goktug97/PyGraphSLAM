@@ -4,11 +4,12 @@ Python Implementation of Graph SLAM
 PyGraphSLAM is my basic implementation of graph SLAM in Python.
 
 ### GIF
-![GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/graphslam.gif)
+![GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/pygraphslam.gif)
 
 ### Notes
 - Trying to improve accuracy, currently the code looks like a scratch book.
 - Currently, the loop closure is really bad and not working reliably.
+- Needs grid mapping
 
 ### Requirements
 * g2opy             https://github.com/uoip/g2opy
