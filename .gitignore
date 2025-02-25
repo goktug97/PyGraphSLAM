@@ -1,3 +1,4 @@
 __pycache__
 *.clf
 slam_*.gif
+.direnv

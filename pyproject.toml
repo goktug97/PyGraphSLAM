@@ -1,0 +1,23 @@
+[project]
+name = "pygraphslam"
+version = "0.1.0"
+description = "Python implementation of Graph SLAM"
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "numpy>=2.2.2",
+    "scikit-learn>=1.6.1",
+    "scipy>=1.15.1",
+    "g2o-python",
+    "raylib>=5.5.0.2",
+]
+
+[dependency-groups]
+dev = [
+    "scikit-build>=0.18.1",
+    "setuptools>=75.8.0",
+]
+
+[tool.uv.sources]
+g2o-python = { git = "https://github.com/miquelmassot/g2o-python", rev="d761ee9" }
