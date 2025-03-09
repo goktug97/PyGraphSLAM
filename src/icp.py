@@ -1,8 +1,15 @@
 # Original code: https://github.com/ClayFlannigan/icp
-# Modified to reject pairs that have greater distance than the specified threshold
+# Modifications:
+# Reject pairs that have greater distance than 1 meters
+# Weights https://arxiv.org/abs/2007.07627
+# Handle different length scans
 
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
+
+
+def welsch_weight(weights, p=0.4):
+    return np.exp(-weights * weights / (2 * np.square(p)))
 
 
 def best_fit_transform(A, B):
@@ -19,6 +26,9 @@ def best_fit_transform(A, B):
 
     assert A.shape == B.shape
 
+    weights = np.linalg.norm(A - B, axis=1)
+    weights = welsch_weight(weights)
+
     # get number of dimensions
     m = A.shape[1]
 
@@ -29,7 +39,7 @@ def best_fit_transform(A, B):
     BB = B - centroid_B
 
     # rotation matrix
-    H = np.dot(AA.T, BB)
+    H = np.dot(AA.T * weights, BB)
     U, S, Vt = np.linalg.svd(H)
     R = np.dot(Vt.T, U.T)
 
