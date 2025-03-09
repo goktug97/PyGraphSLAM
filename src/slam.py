@@ -1,17 +1,18 @@
 #!/usr/bin/env python
 
 import argparse
-from pathlib import Path
-import time
-import itertools
-from dataclasses import dataclass, field
 import heapq
+import itertools
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import g2o
 import numpy as np
-from numpy.typing import NDArray
 import pyray
 import raylib
+import skimage
+from numpy.typing import NDArray
 
 import icp
 import pose_graph
@@ -229,18 +230,6 @@ def load_clf_from_file(clf_file: Path):
     return readings
 
 
-def translation_to_raylib(translation):
-    return (
-        translation[0],
-        0.0,
-        translation[1],
-    )
-
-
-def pose_to_raylib(pose):
-    return (translation_to_raylib(pose.translation()), pose.rotation().angle())
-
-
 parser = argparse.ArgumentParser(description="Python Graph Slam")
 parser.add_argument("--input", type=Path, help="Input CLF File.", required=True)
 args = parser.parse_args()
@@ -256,9 +245,27 @@ camera = pyray.Camera3D(
     pyray.CAMERA_PERSPECTIVE,
 )
 
+resolution = 0.1
+width = 200
+height = 200
+occupancy_model = pyray.load_model_from_mesh(pyray.gen_mesh_plane(width, height, 1, 1))
+image = pyray.Image()
+image.width = int(width / resolution)
+image.height = int(height / resolution)
+image.mipmaps = 1
+image.format = pyray.PIXELFORMAT_UNCOMPRESSED_GRAYSCALE
+occupancy_update_interval = 50
+texture = raylib.LoadTextureFromImage(image)
+pyray.set_material_texture(
+    occupancy_model.materials[0],
+    pyray.MATERIAL_MAP_DIFFUSE,
+    texture,
+)
+grid = np.zeros((int(height / resolution), int(width / resolution)))
+
 slam = SLAM()
-readings = load_clf_from_file(args.input)
-for idx, reading in enumerate(readings):
+
+for idx, reading in enumerate(load_clf_from_file(args.input)):
     slam.add_reading(reading)
 
     raylib.BeginDrawing()
@@ -268,25 +275,57 @@ for idx, reading in enumerate(readings):
     pyray.update_camera(camera, pyray.CAMERA_THIRD_PERSON)
 
     prev_pose = None
+    if not (idx % occupancy_update_interval):
+        grid = np.zeros((int(height / resolution), int(width / resolution)))
+
     for vertex_idx, scan in slam.registered_scans.items():
         pose = slam.optimizer.get_pose(vertex_idx)
-        r = pose.rotation().rotation_matrix()
-        t = pose.translation()
-        scan = (r @ scan.T + t[:, np.newaxis]).T
+        rotation_matrix = pose.rotation().rotation_matrix()
+        translation = pose.translation()
+        scan = (rotation_matrix @ scan.T + translation[:, np.newaxis]).T
         for point in scan:
-            raylib.DrawPoint3D(
-                translation_to_raylib(point),
-                pyray.BLUE,
-            )
-        translation, rotation = pose_to_raylib(pose)
+            # Draw point cloud
+            # raylib.DrawPoint3D(
+            #     (point[0], 0.1, point[1]),
+            #     pyray.BLUE,
+            # )
+
+            # Build occupancy map
+            if not (idx % occupancy_update_interval):
+                line = list(
+                    zip(
+                        *skimage.draw.line(
+                            int(translation[1] / resolution + height / resolution / 2),
+                            int(translation[0] / resolution + width / resolution / 2),
+                            int(point[1] / resolution + height / resolution / 2),
+                            int(point[0] / resolution + width / resolution / 2),
+                        )
+                    )
+                )
+
+                grid[line[-1]] += np.log10(0.7 / 0.3)
+                for pos in line[:-1]:
+                    grid[pos] += np.log10(0.3 / 0.7)
 
         if prev_pose:
+            # Draw trajectory
+            prev_translation = prev_pose.translation()
             raylib.DrawLine3D(
-                translation_to_raylib(prev_pose.translation()), translation, pyray.RED
+                (prev_translation[0], 0.1, prev_translation[1]),
+                (translation[0], 0.1, translation[1]),
+                pyray.RED,
             )
 
         prev_pose = pose
 
+    if not (idx % occupancy_update_interval):
+        gridp = (255 - 255 / (1 + np.exp(-grid))).astype(np.uint8)
+        raylib.UpdateTexture(texture, pyray.ffi.from_buffer(gridp.data))
+
+    # Draw occupancy map
+    pyray.draw_model(occupancy_model, (0.0, 0.0, 0.0), 1.0, pyray.WHITE)
+
+    # Draw robot position
     size = 0.3
     pose = slam.optimizer.get_pose(slam.last_vertex_idx)
     transform_matrix = pose.to_isometry().matrix()
@@ -294,13 +333,13 @@ for idx, reading in enumerate(readings):
     left = transform_matrix @ np.array([-size * 0.5, -size * 0.5, 1.0])
     right = transform_matrix @ np.array([-size * 0.5, size * 0.5, 1.0])
     raylib.DrawTriangle3D(
-        translation_to_raylib(left[:2]),
-        translation_to_raylib(right[:2]),
-        translation_to_raylib(tip[:2]),
+        (tip[0], 0.1, tip[1]),
+        (left[0], 0.1, left[1]),
+        (right[0], 0.1, right[1]),
         pyray.RED,
     )
 
-    raylib.DrawGrid(50, 1.0)
+    # raylib.DrawGrid(50, 1.0)
     raylib.EndMode3D()
     raylib.EndDrawing()
 

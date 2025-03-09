@@ -11,6 +11,7 @@ dependencies = [
     "scipy>=1.15.1",
     "g2o-python",
     "raylib>=5.5.0.2",
+    "scikit-image>=0.25.2",
 ]
 
 [dependency-groups]
