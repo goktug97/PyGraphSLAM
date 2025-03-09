@@ -6,6 +6,9 @@ PyGraphSLAM is my basic implementation of graph SLAM in Python.
 ### GIF
 ![GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/pygraphslam.gif)
 
+### Occupancy Map
+![GIF](https://raw.githubusercontent.com/goktug97/PyGraphSLAM/master/pygraphslam_occupancy.gif)
+
 ### Usage
 You can download datasets from http://ais.informatik.uni-freiburg.de/slamevaluation/datasets.php
 
