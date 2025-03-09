@@ -60,8 +60,6 @@ def nearest_neighbor(src, dst):
         indices: dst indices of the nearest neighbor
     """
 
-    assert src.shape == dst.shape
-
     neigh = NearestNeighbors(n_neighbors=1)
     neigh.fit(dst)
     distances, indices = neigh.kneighbors(src, return_distance=True)
@@ -83,8 +81,6 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
         i: number of iterations to converge
     """
 
-    assert A.shape == B.shape
-
     # get number of dimensions
     m = A.shape[1]
 
@@ -94,42 +90,35 @@ def icp(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     src[:m, :] = np.copy(A.T)
     dst[:m, :] = np.copy(B.T)
 
-    # apply the initial pose estimation
-    if init_pose is not None:
-        src = np.dot(init_pose, src)
+    T_acc = init_pose if init_pose is not None else np.identity(m + 1)
+    src = np.dot(T_acc, src)
 
     prev_error = 0
 
     for i in range(max_iterations):
-        # find the nearest neighbors between the current source and destination points
-        distances, indices = nearest_neighbor(src[:m, :].T, dst[:m, :].T)
+        distances, indices = nearest_neighbor(src.T, dst.T)
 
-        # Reject pairs that have 1 meter distance between them
-        indices = indices[np.linalg.norm(src[:m, :], axis=0) < 80]
-        distances = distances[np.linalg.norm(src[:m, :], axis=0) < 80]
-        filtered_src = src[:, np.linalg.norm(src[:m, :], axis=0) < 80]
-        indices = indices[distances < 1.0]
+        # Reject pairs that have more than 1 meter distance between them
+        close_match_mask = distances < 1.0
 
-        matched_src = filtered_src[:m, distances < 1.0].T
-        matched_dst = dst[:m, indices].T
-
-        if not len(indices):
+        # Need at least 3 points for a meaningful transform
+        if np.sum(close_match_mask) < 3:
             continue
 
-        # compute the transformation between
-        # the current source and nearest destination points
+        matched_src = src[:m, close_match_mask].T
+        matched_dst = dst[:m, indices[close_match_mask]].T
+
         T, _, _ = best_fit_transform(matched_src, matched_dst)
 
         # update the current source
         src = np.dot(T, src)
 
+        T_acc = np.dot(T, T_acc)
+
         # check error
-        mean_error = np.mean(distances)
+        mean_error = np.mean(distances[close_match_mask])
         if np.abs(prev_error - mean_error) < tolerance:
             break
         prev_error = mean_error
 
-    # calculate final transformation
-    T, _, _ = best_fit_transform(A, src[:m, :].T)
-
-    return T, distances, i
+    return T_acc, distances, i

@@ -2,31 +2,188 @@
 
 import argparse
 from pathlib import Path
+import time
+import itertools
+from dataclasses import dataclass, field
+import heapq
 
 import g2o
 import numpy as np
+from numpy.typing import NDArray
 import pyray
 import raylib
-import scipy
 
 import icp
 import pose_graph
 
-# def hessian_matrix(hessian_fun):
-#     hessian = np.ndarray((3, 3))
-#     for i in range(3):
-#         for j in range(3):
-#             hessian[i, j] = hessian_fun(i, j)
-#     return hessian
+
+@dataclass
+class Laser:
+    angle_min: float
+    angle_max: float
+    angle_increment: float
+    max_distance: float
+    distances: list[float] | NDArray[float]
 
 
-# def eigsorted(cov):
-#     vals, vecs = np.linalg.eigh(cov)
-#     order = vals.argsort()[::-1]
-#     return vals[order], vecs[:, order]
+@dataclass
+class Odometry:
+    transform: NDArray[float]
 
 
-def transformation_matrix(vector):
+@dataclass
+class Reading:
+    data: Laser | Odometry
+    timestamp: float = field(default_factory=time.time)
+
+    def __eq__(self, other):
+        self.timestamp == other.timestamp
+
+    def __lt__(self, other):
+        self.timestamp < other.timestamp
+
+    def __le__(self, other):
+        (self < other) or (self == other)
+
+    def __gt__(self, other):
+        other < self
+
+    def __ge__(self, other):
+        other <= self
+
+
+class SLAM:
+    def __init__(self):
+        self.optimizer = pose_graph.PoseGraphOptimization()
+        self.sensors = dict()
+        self.sensor_ids = itertools.count(0)
+        self.readings = []
+        self.vertex_counter = itertools.count(0)
+        self.prev_odom = g2o.SE2(g2o.Isometry2d(np.eye(3)))
+        self.optimizer.add_vertex(next(self.vertex_counter), self.prev_odom, True)
+        self.last_vertex_idx = 0
+        self.registered_scans = dict()
+
+    def add_reading(self, reading: Reading):
+        heapq.heappush(self.readings, reading)
+
+    def optimize(self):
+        while len(self.readings):
+            reading = heapq.heappop(self.readings)
+            data = reading.data
+
+            if isinstance(data, Laser):
+                angles = np.arange(data.angle_min, data.angle_max, data.angle_increment)
+                positions = (
+                    np.array([np.cos(angles), np.sin(angles)]).T
+                    * data.distances[:, np.newaxis]
+                )
+                mask = np.linalg.norm(positions, axis=1) < data.max_distance
+                positions = positions[mask]
+
+                if not len(self.registered_scans):
+                    self.registered_scans[self.last_vertex_idx] = positions
+                    continue
+
+                prev_idx = next(reversed(self.registered_scans.keys()))
+                prev_scan = self.registered_scans[prev_idx]
+                prev_pose = self.optimizer.get_pose(prev_idx)
+                current_pose = self.optimizer.get_pose(self.last_vertex_idx)
+                transform = prev_pose.inverse() * current_pose
+                if (
+                    np.linalg.norm(transform.translation()) > 0.4
+                    or abs(transform.rotation().angle()) > 0.2
+                ):
+                    transformation, distances, iter = icp.icp(
+                        positions,
+                        prev_scan,
+                        transform.to_isometry().matrix(),
+                        max_iterations=80,
+                        tolerance=0.00001,
+                    )
+                    self.optimizer.add_edge(
+                        [prev_idx, self.last_vertex_idx],
+                        g2o.SE2(g2o.Isometry2d(transformation)),
+                        # TODO: How to calculate information matrix?
+                        information=10.0 * np.eye(3),
+                    )
+                    self.registered_scans[self.last_vertex_idx] = positions
+
+                    # Loop closure only makes sense if the last reading is a valid laser scan
+                    self.loop_closure()
+
+            elif isinstance(data, Odometry):
+                current_odom = g2o.SE2(g2o.Isometry2d(data.transform))
+                transform = self.prev_odom.inverse() * current_odom
+
+                if (np.linalg.norm(transform.translation()) < np.finfo(float).eps) and (
+                    transform.rotation().angle() < np.finfo(float).eps
+                ):
+                    continue
+
+                vertex_idx = next(self.vertex_counter)
+                assert data.transform.shape == (3, 3)
+                self.optimizer.add_vertex(vertex_idx, current_odom)
+                self.optimizer.add_edge(
+                    [vertex_idx - 1, vertex_idx],
+                    transform,
+                    information=np.eye(3),
+                )
+                self.last_vertex_idx = vertex_idx
+                self.prev_odom = current_odom
+            else:
+                raise ValueError(f"Unknown data type: {type(data)}")
+
+            if self.last_vertex_idx > 1:
+                self.optimizer.optimize()
+
+    def loop_closure(self):
+        if len(self.registered_scans) < 2:
+            return
+
+        scans = reversed(self.registered_scans.items())
+        current_idx, current_scan = next(scans)
+        assert current_idx == self.last_vertex_idx
+        current_pose = self.optimizer.get_pose(current_idx)
+
+        for prev_idx, prev_scan in scans:
+            vertex = self.optimizer.vertex(prev_idx)
+            inv_hessian, valid = self.optimizer.compute_marginals(vertex)
+
+            if not valid:
+                continue
+
+            prev_pose = vertex.estimate()
+            position_diff = (prev_pose.inverse() * current_pose).translation()
+
+            cov = inv_hessian.block(prev_idx - 1, prev_idx - 1)
+            cov = np.linalg.inv(cov)
+            position_cov = cov[:2, :2]
+
+            mahalanobis_dist = np.sqrt(
+                position_diff.T @ np.linalg.inv(position_cov) @ position_diff
+            )
+
+            if mahalanobis_dist < 3:
+                transformation, distances, iter = icp.icp(
+                    prev_scan,
+                    current_scan,
+                    (prev_pose.inverse() * current_pose).to_isometry().matrix(),
+                    max_iterations=80,
+                    tolerance=0.0001,
+                )
+
+                if len(distances) and np.mean(distances) < 0.15:
+                    rk = g2o.RobustKernelDCS(10)
+                    self.optimizer.add_edge(
+                        [current_idx, prev_idx],
+                        g2o.SE2(g2o.Isometry2d(transformation)),
+                        robust_kernel=rk,
+                        information=np.eye(3),
+                    )
+
+
+def homogeneous_transform(vector):
     x, y, theta = vector
     return np.array(
         [
@@ -39,25 +196,53 @@ def transformation_matrix(vector):
 
 def load_clf_from_file(clf_file: Path):
     with clf_file.open() as f:
-        laser_readings = []
-        odoms = []
+        readings = []
         for line in f:
             tokens = line.split(" ")
             if tokens[0] == "FLASER":
                 num_readings = int(tokens[1])
                 scans = np.array(tokens[2 : 2 + num_readings], dtype=float)
+                timestamp = float(tokens[8 + num_readings])
 
-                angles = np.linspace(-np.pi / 2, np.pi / 2, num_readings)
-
-                laser_readings.append(
-                    np.array([np.cos(angles), np.sin(angles)]).T * scans[:, np.newaxis]
+                heapq.heappush(
+                    readings,
+                    Reading(
+                        data=Laser(
+                            angle_min=-np.pi / 2,
+                            angle_max=np.pi / 2,
+                            angle_increment=np.pi / 180,
+                            max_distance=80,
+                            distances=scans,
+                        ),
+                        timestamp=timestamp,
+                    ),
                 )
-                x = float(tokens[2 + num_readings])
-                y = float(tokens[3 + num_readings])
-                theta = float(tokens[4 + num_readings])
-                odoms.append(np.array([x, y, theta]))
+            elif tokens[0] == "ODOM":
+                x = float(tokens[1])
+                y = float(tokens[2])
+                theta = float(tokens[3])
+                timestamp = float(tokens[7])
+                heapq.heappush(
+                    readings,
+                    Reading(
+                        data=Odometry(transform=homogeneous_transform([x, y, theta])),
+                        timestamp=timestamp,
+                    ),
+                )
 
-    return laser_readings, odoms
+    return readings
+
+
+def translation_to_raylib(translation):
+    return (
+        translation[0],
+        0.0,
+        translation[1],
+    )
+
+
+def pose_to_raylib(pose):
+    return (translation_to_raylib(pose.translation()), pose.rotation().angle())
 
 
 parser = argparse.ArgumentParser(description="Python Graph Slam")
@@ -66,7 +251,6 @@ args = parser.parse_args()
 
 raylib.InitWindow(800, 800, b"Python Graph SLAM")
 raylib.SetExitKey(pyray.KEY_Q)
-raylib.SetTargetFPS(60)
 
 camera = pyray.Camera3D(
     (0.0, 0.0, 10.0),
@@ -76,110 +260,54 @@ camera = pyray.Camera3D(
     pyray.CAMERA_PERSPECTIVE,
 )
 
-laser_readings, odoms = load_clf_from_file(args.input)
+slam = SLAM()
+readings = load_clf_from_file(args.input)
+for idx, reading in enumerate(readings):
+    slam.add_reading(reading)
+    slam.optimize()
 
-# Starting point
-pose = transformation_matrix(odoms[0])
-optimizer = pose_graph.PoseGraphOptimization()
-optimizer.add_vertex(0, g2o.SE2(g2o.Isometry2d(pose)), True)
+    raylib.BeginDrawing()
+    raylib.ClearBackground(pyray.WHITE)
 
-vertex_idx = 1
-registered_lasers = []
+    pyray.begin_mode_3d(camera)
+    pyray.update_camera(camera, pyray.CAMERA_THIRD_PERSON)
 
-prev_odom = odoms.pop(0)
-prev_laser = laser_readings.pop(0)
-registered_lasers = [prev_laser]
+    prev_pose = None
+    for vertex_idx, scan in slam.registered_scans.items():
+        pose = slam.optimizer.get_pose(vertex_idx)
+        r = pose.rotation().rotation_matrix()
+        t = pose.translation()
+        scan = (r @ scan.T + t[:, np.newaxis]).T
+        for point in scan:
+            raylib.DrawPoint3D(
+                translation_to_raylib(point),
+                pyray.BLUE,
+            )
+        translation, rotation = pose_to_raylib(pose)
 
-for odom, laser in zip(odoms, laser_readings):
-    if raylib.WindowShouldClose():
-        break
+        if prev_pose:
+            raylib.DrawLine3D(
+                translation_to_raylib(prev_pose.translation()), translation, pyray.RED
+            )
 
-    dx = odom - prev_odom
-    if np.linalg.norm(dx[0:2]) > 0.4 or abs(dx[2]) > 0.2:
-        # Scan Matching
-        init_pose = transformation_matrix(dx)
-        transformation, distances, iter = icp.icp(
-            laser, prev_laser, init_pose, max_iterations=80, tolerance=0.0001
-        )
+        prev_pose = pose
 
-        pose = np.matmul(pose, transformation)
-        optimizer.add_vertex(vertex_idx, g2o.SE2(g2o.Isometry2d(pose)))
-        rk = g2o.RobustKernelHuber()
-        optimizer.add_edge(
-            [vertex_idx - 1, vertex_idx],
-            g2o.SE2(g2o.Isometry2d(transformation)),
-            robust_kernel=rk,
-            information=100.0 * np.eye(3),
-        )
+    size = 0.3
+    pose = slam.optimizer.get_pose(slam.last_vertex_idx)
+    transform_matrix = pose.to_isometry().matrix()
+    tip = transform_matrix @ np.array([size, 0.0, 1.0])
+    left = transform_matrix @ np.array([-size * 0.5, -size * 0.5, 1.0])
+    right = transform_matrix @ np.array([-size * 0.5, size * 0.5, 1.0])
+    raylib.DrawTriangle3D(
+        translation_to_raylib(left[:2]),
+        translation_to_raylib(right[:2]),
+        translation_to_raylib(tip[:2]),
+        pyray.RED,
+    )
 
-        # Loop Closure
-        if vertex_idx > 10 and not vertex_idx % 10:
-            poses = [
-                optimizer.get_pose(idx).to_vector()[0:2]
-                for idx in range(vertex_idx - 1)
-            ]
-            kd = scipy.spatial.cKDTree(poses)
-            pose = optimizer.get_pose(vertex_idx)
-            x, y, _ = pose.to_vector()
-            idxs = kd.query_ball_point(np.array([x, y]), r=4.25)
-            for idx in idxs:
-                prev_laser = registered_lasers[idx]
-
-                transformation, distances, iter = icp.icp(
-                    prev_laser,
-                    laser,
-                    np.eye(3),
-                    max_iterations=80,
-                    tolerance=0.0001,
-                )
-
-                if len(distances) and np.mean(distances) < 0.15:
-                    (x, y, theta) = (
-                        pose.inverse() * optimizer.get_pose(idx)
-                    ).to_vector()
-
-                    if np.sqrt(x**2 + y**2) < 5.0 and theta < np.pi / 2:
-                        rk = g2o.RobustKernelDCS()
-                        optimizer.add_edge(
-                            [vertex_idx, idx],
-                            g2o.SE2(g2o.Isometry2d(transformation)),
-                            robust_kernel=rk,
-                            information=np.eye(3) * 0.1,
-                        )
-
-        optimizer.optimize()
-        pose = optimizer.get_pose(vertex_idx).to_isometry().matrix()
-
-        vertex_idx += 1
-        prev_odom = odom
-        prev_laser = laser
-        registered_lasers.append(laser)
-
-        # Draw trajectory and map
-        raylib.BeginDrawing()
-        raylib.ClearBackground(pyray.WHITE)
-
-        pyray.begin_mode_3d(camera)
-        pyray.update_camera(camera, pyray.CAMERA_THIRD_PERSON)
-
-        prev = None
-        for idx in range(0, vertex_idx):
-            x = optimizer.get_pose(idx)
-            r = x.to_isometry().R
-            t = x.to_isometry().t
-            filtered = registered_lasers[idx]
-            filtered = filtered[np.linalg.norm(filtered, axis=1) < 80]
-            for point in (r @ filtered.T + t[:, np.newaxis]).T:
-                raylib.DrawPoint3D((point[0], 0.0, point[1]), pyray.BLUE)
-            position = x.to_vector()
-            position = (position[0], 0.0, position[1])
-            if prev:
-                raylib.DrawLine3D(prev, position, pyray.RED)
-            prev = position
-
-        raylib.DrawGrid(50, 1.0)
-        raylib.EndMode3D()
-        raylib.EndDrawing()
+    raylib.DrawGrid(50, 1.0)
+    raylib.EndMode3D()
+    raylib.EndDrawing()
 
 
 pyray.close_window()
