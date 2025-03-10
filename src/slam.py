@@ -65,6 +65,8 @@ class SLAM:
     def add_reading(self, reading: Reading):
         data = reading.data
 
+        cleanup = False
+
         if isinstance(data, Laser):
             angles = np.arange(data.angle_min, data.angle_max, data.angle_increment)
             positions = (
@@ -101,6 +103,7 @@ class SLAM:
                     information=100.0 / np.mean(distances) * np.eye(3),
                 )
                 self.registered_scans[self.last_vertex_idx] = positions
+                cleanup = True
 
                 # Loop closure only makes sense if the last reading is a valid laser scan
                 self.loop_closure()
@@ -128,7 +131,15 @@ class SLAM:
             raise ValueError(f"Unknown data type: {type(data)}")
 
         if self.last_vertex_idx > 1:
+            # self.optimizer.set_verbose(True)
             self.optimizer.optimize()
+
+            if cleanup:
+                keys = reversed(self.registered_scans.keys())
+                end = next(keys)
+                start = next(keys)
+                for vertex_idx in range(start + 1, end):
+                    self.optimizer.remove_vertex(self.optimizer.vertex(vertex_idx))
 
     def loop_closure(self):
         if len(self.registered_scans) < 2:
@@ -153,7 +164,11 @@ class SLAM:
             prev_pose = vertex.estimate()
             position_diff = (prev_pose.inverse() * current_pose).translation()
 
-            cov = inv_hessian.block(prev_idx - 1, prev_idx - 1)
+            for index, block in enumerate(inv_hessian.block_cols()):
+                if block:
+                    cov = block[index]
+                    break
+
             cov = np.linalg.inv(cov)
             position_cov = cov[:2, :2]
 
@@ -207,7 +222,7 @@ def load_clf_from_file(clf_file: Path):
                         data=Laser(
                             angle_min=-np.pi / 2,
                             angle_max=np.pi / 2,
-                            angle_increment=np.pi / 180,
+                            angle_increment=np.pi / num_readings,
                             max_distance=80,
                             distances=scans,
                         ),
@@ -230,7 +245,7 @@ def load_clf_from_file(clf_file: Path):
     return readings
 
 
-parser = argparse.ArgumentParser(description="Python Graph Slam")
+parser = argparse.ArgumentParser(description="Python Graph SLAM")
 parser.add_argument("--input", type=Path, help="Input CLF File.", required=True)
 args = parser.parse_args()
 
